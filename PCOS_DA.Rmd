@@ -1,0 +1,56 @@
+---
+title: "Анализ данных ген.экспрессии гранулезных клеток при СПКЯ"
+author: "Игорь Буланов"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+## Анализ ген.экспресии 
+
+
+```{r, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(DESeq2)
+```
+## Анализ данных исследования GSE173160
+```{r, echo = FALSE}
+cts <- read_delim("/home/ibulanov/data/PCOS/GEO/GSE173160_gene_count_matrix.txt.gz")
+cts <- cts[,-c(2:13)]
+cts <- column_to_rownames(cts, var = "lncRNA_id")
+colnames(cts) <- gsub("^1_", "", colnames(cts))
+
+#replace NAs (133) in 97371 sample to 0s
+#cts$1_97550_count <- 
+
+samples <- c("95784_count", 
+             "95841_count", 
+             "96846_count",
+             "97194_count",
+             "97477_count",
+             "97550_count",
+             "92393_count",
+             "96349_count",
+             "96412_count",
+             "96725_count",
+             "97232_count",
+             "97371_count"
+             )
+cts <- cts[order(samples),]
+
+coldata <- data.frame(batch = samples, condition = 
+                        c(rep("PCOS", 6),
+                          rep("CONTROL", 6)
+                          ))
+
+
+dds <- DESeqDataSetFromMatrix(countData = cts,
+                              colData = coldata,
+                              design= ~ condition)
+
+```
+
+
