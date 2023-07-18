@@ -9,14 +9,55 @@ output: html_document
 knitr::opts_chunk$set(echo = FALSE)
 ```
 
-## Анализ ген.экспресии 
-
+## Анализ ген.экспресии
 
 ```{r, message=FALSE, warning=FALSE}
 library(tidyverse)
 library(DESeq2)
 ```
-## Анализ данных исследования GSE173160
+
+# Предобработка данных исследования GSE173160
+
+```{r, echo = FALSE}
+cts <- read_delim("/home/ibulanov/data/PCOS/GEO/GSE173160_gene_count_matrix.txt.gz")
+cts <- cts[,-c(2:13)]
+cts <- column_to_rownames(cts, var = "lncRNA_id")
+colnames(cts) <- gsub("^1_", "", colnames(cts))
+
+#first 6 are PCOS, the last 6 are CONTROLS
+samples <- c("95784_count", 
+             "95841_count", 
+             "96846_count",
+             "97194_count",
+             "97477_count",
+             "97550_count",
+             "92393_count",
+             "96349_count",
+             "96412_count",
+             "96725_count",
+             "97232_count",
+             "97371_count"
+             )
+
+#reoder columns
+cts <- cts[,samples]
+
+coldata <- data.frame(batch = samples, condition = 
+                        c(rep("PCOS", 6),
+                          rep("CONTROL", 6)
+                          ))
+
+#replace NAs (133) in 97371 sample to 0s
+cts[is.na(cts)] = 0
+
+dds <- DESeqDataSetFromMatrix(countData = cts,
+                              colData = coldata,
+                              design= ~condition)
+
+```
+
+# Предобработка данных исследования GSE168404 - mRNA
+
 ```{r, echo = FALSE}
 cts <- read_delim("/home/ibulanov/data/PCOS/GEO/GSE173160_gene_count_matrix.txt.gz")
 cts <- cts[,-c(2:13)]
@@ -56,7 +97,9 @@ dds <- DESeqDataSetFromMatrix(countData = cts,
 ```
 
 # Exploratory analysis and visualization
+
 ## Pre-filtering the dataset
+
 ```{r}
 nrow(dds)
 keep <- rowSums(counts(dds)) > 1
@@ -65,6 +108,7 @@ nrow(dds)
 ```
 
 ##The variance stabilizing transformation and the rlog
+
 ```{r, echo=FALSE}
 vsd <- vst(dds, blind = FALSE)
 head(assay(vsd), 3)
@@ -93,6 +137,124 @@ df$transformation <- factor(df$transformation, levels=lvls)
 ggplot(df, aes(x = x, y = y)) + geom_hex(bins = 80) +
   coord_fixed() + facet_grid( . ~ transformation)  
 ```
+
 ## Sample distances
 
+```{r, echo=FALSE}
+sampleDists <- dist(t(assay(vsd)))
+sampleDists
 
+library("pheatmap")
+library("RColorBrewer")
+
+sampleDistMatrix <- as.matrix( sampleDists )
+rownames(sampleDistMatrix) <- paste( vsd$dex, vsd$cell, sep = " - " )
+colnames(sampleDistMatrix) <- NULL
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+pheatmap(sampleDistMatrix,
+         clustering_distance_rows = sampleDists,
+         clustering_distance_cols = sampleDists,
+         col = colors)
+
+library("PoiClaClu")
+poisd <- PoissonDistance(t(counts(dds)))
+
+samplePoisDistMatrix <- as.matrix( poisd$dd )
+rownames(samplePoisDistMatrix) <- paste( dds$dex, dds$cell, sep=" - " )
+colnames(samplePoisDistMatrix) <- NULL
+pheatmap(samplePoisDistMatrix,
+         clustering_distance_rows = poisd$dd,
+         clustering_distance_cols = poisd$dd,
+         col = colors)
+```
+
+#PCA plot
+
+```{r}
+plotPCA(vsd, intgroup = "condition")
+
+#PCA with VST data
+pcaData <- plotPCA(vsd, intgroup = c( "batch", "condition"), returnData = TRUE)
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+
+ggplot(pcaData, aes(x = PC1, y = PC2, color = batch, shape = condition)) +
+  geom_point(size =3) +
+  xlab(paste0("PC1: ", percentVar[1], "% variance")) +
+  ylab(paste0("PC2: ", percentVar[2], "% variance")) +
+  coord_fixed() +
+  ggtitle("PCA with VST data")
+
+#GLM-PCA
+library("glmpca")
+gpca <- glmpca(counts(dds), L=2)
+gpca.dat <- gpca$factors
+gpca.dat$dim1 <- dds$batch
+gpca.dat$dim2 <- dds$condition
+ggplot(gpca.dat, aes(x = dim1, y = dim2, color = coldata$batch, shape = coldata$condition)) +
+  geom_point(size =3) + coord_fixed() + ggtitle("glmpca - Generalized PCA")
+
+
+#MDS Plot
+mds <- as.data.frame(colData(vsd))  %>%
+         cbind(cmdscale(sampleDistMatrix))
+ggplot(mds, aes(x = `1`, y = `2`, color = batch, shape = condition)) +
+  geom_point(size = 3) + coord_fixed() + ggtitle("MDS with VST data")
+
+#MDS with PoissonDistance
+mdsPois <- as.data.frame(colData(dds)) %>%
+   cbind(cmdscale(samplePoisDistMatrix))
+ggplot(mdsPois, aes(x = `1`, y = `2`, color = batch, shape = condition)) +
+  geom_point(size = 3) + coord_fixed() + ggtitle("MDS with PoissonDistances")
+```
+
+#Анализ диф.экспрессии
+
+```{r, eval=FALSE}
+dds <- DESeq(dds)
+res <- results(dds)
+#res <- results(dds, contrast=c("dex","trt","untrt"))
+mcols(res, use.names = TRUE)
+summary(res)
+
+res_tbl <- as.data.frame(res@listData)
+rownames(res_tbl) <- rownames(res)
+res_tbl <- arrange(res_tbl, pvalue, desc(log2FoldChange))
+write_delim(res_tbl, "DGE_result_GSE173160.tsv", delim = '\t')
+
+
+```
+
+#Визуализация (Вулканический плот)
+
+```{r}
+#filtered genes
+table(res_tbl$pvalue < 0.05 & abs(res_tbl$log2FoldChange) > 1)
+
+#show number of genes with p-adj value below 0.05 and logFC <>1
+res.05 <- results(dds, alpha = 0.05)
+table(res.05$padj < 0.05)
+
+resLFC1 <- results(dds, lfcThreshold=1)
+table(resLFC1$padj < 0.1)
+
+library(EnhancedVolcano)
+
+#Annotate the Ensembl gene IDs to gene symbols:
+ens <- rownames(res)
+
+library(org.Hs.eg.db)
+symbols <- mapIds(org.Hs.eg.db, keys = ens,
+  column = c('SYMBOL'), keytype = 'ENSEMBL')
+symbols <- symbols[!is.na(symbols)]
+symbols <- symbols[match(rownames(res), names(symbols))]
+rownames(airway) <- symbols
+keep <- !is.na(rownames(airway))
+airway <- airway[keep,]
+
+#Plot
+GSE173160_EV <- EnhancedVolcano(res,
+  lab = rownames(res),
+  x = 'log2FoldChange',
+  y = 'pvalue',
+  title = "GSE173160")
+```
