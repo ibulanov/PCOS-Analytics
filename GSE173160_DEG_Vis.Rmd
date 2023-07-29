@@ -1,0 +1,377 @@
+---
+title: "Анализ данных ген.экспрессии гранулезных клеток при СПКЯ"
+author: "Игорь Буланов"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+## Анализ ген.экспресии
+
+```{r, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(DESeq2)
+```
+
+# Предобработка данных исследования GSE173160
+
+```{r, echo = FALSE}
+cts <- read_delim("/home/ibulanov/data/PCOS/GEO/GSE173160_gene_count_matrix.txt.gz")
+cts <- cts[,-c(2:13)]
+cts <- column_to_rownames(cts, var = "lncRNA_id")
+colnames(cts) <- gsub("^1_", "", colnames(cts))
+
+#first 6 are PCOS, the last 6 are CONTROLS
+samples <- c("95784_count", 
+             "95841_count", 
+             "96846_count",
+             "97194_count",
+             "97477_count",
+             "97550_count",
+             "92393_count",
+             "96349_count",
+             "96412_count",
+             "96725_count",
+             "97232_count",
+             "97371_count"
+             )
+
+#reoder columns
+cts <- cts[,samples]
+
+coldata <- data.frame(batch = samples, condition = 
+                        c(rep("PCOS", 6),
+                          rep("CONTROL", 6)
+                          ))
+
+#replace NAs (133) in 97371 sample to 0s
+cts[is.na(cts)] = 0
+
+dds <- DESeqDataSetFromMatrix(countData = cts,
+                              colData = coldata,
+                              design= ~condition)
+
+```
+
+# Exploratory analysis and visualization
+
+## Pre-filtering the dataset
+
+```{r}
+nrow(dds)
+keep <- rowSums(counts(dds)) > 1
+dds <- dds[keep,]
+nrow(dds)
+```
+
+##The variance stabilizing transformation and the rlog
+
+```{r, echo=FALSE}
+vsd <- vst(dds, blind = FALSE)
+head(assay(vsd), 3)
+
+rld <- rlog(dds, blind = FALSE)
+head(assay(rld), 3)
+
+colData(vsd)
+
+library("dplyr")
+library("ggplot2")
+
+dds <- estimateSizeFactors(dds)
+
+df <- bind_rows(
+  as_tibble(log2(counts(dds, normalized=TRUE)[, 1:2]+1)) %>%
+         mutate(transformation = "log2(x + 1)"),
+  as_tibble(assay(vsd)[, 1:2]) %>% mutate(transformation = "vst"),
+  as_tibble(assay(rld)[, 1:2]) %>% mutate(transformation = "rlog"))
+  
+colnames(df)[1:2] <- c("x", "y")  
+
+lvls <- c("log2(x + 1)", "vst", "rlog")
+df$transformation <- factor(df$transformation, levels=lvls)
+
+ggplot(df, aes(x = x, y = y)) + geom_hex(bins = 80) +
+  coord_fixed() + facet_grid( . ~ transformation)  
+```
+
+## Sample distances
+
+```{r, echo=FALSE}
+sampleDists <- dist(t(assay(vsd)))
+sampleDists
+
+library("pheatmap")
+library("RColorBrewer")
+
+sampleDistMatrix <- as.matrix( sampleDists )
+rownames(sampleDistMatrix) <- paste( vsd$dex, vsd$cell, sep = " - " )
+colnames(sampleDistMatrix) <- NULL
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+pheatmap(sampleDistMatrix,
+         clustering_distance_rows = sampleDists,
+         clustering_distance_cols = sampleDists,
+         col = colors)
+
+library("PoiClaClu")
+poisd <- PoissonDistance(t(counts(dds)))
+
+samplePoisDistMatrix <- as.matrix( poisd$dd )
+rownames(samplePoisDistMatrix) <- paste( dds$dex, dds$cell, sep=" - " )
+colnames(samplePoisDistMatrix) <- NULL
+pheatmap(samplePoisDistMatrix,
+         clustering_distance_rows = poisd$dd,
+         clustering_distance_cols = poisd$dd,
+         col = colors)
+```
+
+#PCA plot
+
+```{r}
+plotPCA(vsd, intgroup = "condition") +
+  ggtitle("PCA of GSE173160")
+
+#PCA with VST data
+pcaData <- plotPCA(vsd, intgroup = c( "batch", "condition"), returnData = TRUE)
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+
+ggplot(pcaData, aes(x = PC1, y = PC2, color = batch, shape = condition)) +
+  geom_point(size =3) +
+  xlab(paste0("PC1: ", percentVar[1], "% variance")) +
+  ylab(paste0("PC2: ", percentVar[2], "% variance")) +
+  coord_fixed() +
+  ggtitle("PCA with VST data")
+
+#GLM-PCA
+library("glmpca")
+gpca <- glmpca(counts(dds), L=2)
+gpca.dat <- gpca$factors
+gpca.dat$dim1 <- dds$batch
+gpca.dat$dim2 <- dds$condition
+ggplot(gpca.dat, aes(x = dim1, y = dim2, color = coldata$batch, shape = coldata$condition)) +
+  geom_point(size =3) + coord_fixed() + ggtitle("glmpca - Generalized PCA")
+
+
+#MDS Plot
+mds <- as.data.frame(colData(vsd))  %>%
+         cbind(cmdscale(sampleDistMatrix))
+ggplot(mds, aes(x = `1`, y = `2`, color = batch, shape = condition)) +
+  geom_point(size = 3) + coord_fixed() + ggtitle("MDS with VST data")
+
+#MDS with PoissonDistance
+mdsPois <- as.data.frame(colData(dds)) %>%
+   cbind(cmdscale(samplePoisDistMatrix))
+ggplot(mdsPois, aes(x = `1`, y = `2`, color = batch, shape = condition)) +
+  geom_point(size = 3) + coord_fixed() + ggtitle("MDS with PoissonDistances")
+```
+
+#Анализ диф.экспрессии
+
+```{r, eval=FALSE}
+dds <- DESeq(dds)
+res <- results(dds)
+#res <- results(dds, contrast=c("dex","trt","untrt"))
+mcols(res, use.names = TRUE)
+summary(res)
+```
+
+# Конвертация имен генов и сохранение
+
+```{r}
+res_tbl <- as.data.frame(res@listData)
+rownames(res_tbl) <- rownames(res)
+res_tbl <- rownames_to_column(res_tbl, var = "gene")
+
+library(biomaRt)
+ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+
+#convert to external gene name
+gene_names <- getBM(
+  attributes = c("ensembl_gene_id", "external_gene_name"),
+  filters = "ensembl_gene_id",
+  values = res_tbl$gene,
+  mart = ensembl
+)
+
+#connect new names to old ones
+resTblMerged <- merge(gene_names, res_tbl,
+                        by.x = "ensembl_gene_id",
+                        by.y = "gene", all=TRUE)
+#if there is NA gene symbol, leave ensembl gene ids
+resTblMerged$external_gene_name <-
+  ifelse(is.na(resTblMerged$external_gene_name),
+             resTblMerged$ensembl_gene_id,
+       resTblMerged$external_gene_name
+       )
+#if there is empty space isntead of gene symbol, leave ensembl gene ids
+resTblMerged$external_gene_name <-
+  ifelse(resTblMerged$external_gene_name== "",
+             resTblMerged$ensembl_gene_id,
+       resTblMerged$external_gene_name
+       )
+#remove first column (ensembl gene ids)
+resTblMerged <- resTblMerged[,-1]
+
+
+#write_delim(res_tbl, "DGE_result_GSE193123.tsv", delim = '\t')
+
+```
+
+#Визуализация (Вулканический плот)
+
+```{r}
+#filtered genes
+table(res_tbl$pvalue < 0.05 & abs(res_tbl$log2FoldChange) > 1)
+
+#show number of genes with p-adj value below 0.05 and logFC <>1
+res.05 <- results(dds, alpha = 0.05)
+table(res.05$padj < 0.05)
+
+resLFC1 <- results(dds, lfcThreshold=1)
+table(resLFC1$padj < 0.1)
+
+library(EnhancedVolcano)
+
+#Annotate the Ensembl gene IDs to gene symbols:
+ens <- rownames(res)
+
+library(org.Hs.eg.db)
+symbols <- mapIds(org.Hs.eg.db, keys = ens,
+  column = c('SYMBOL'), keytype = 'ENSEMBL')
+symbols <- symbols[!is.na(symbols)]
+symbols <- symbols[match(rownames(res), names(symbols))]
+rownames(airway) <- symbols
+keep <- !is.na(rownames(airway))
+airway <- airway[keep,]
+
+#Plot
+GSE173160_EV <- EnhancedVolcano(res,
+  lab = rownames(res),
+  x = 'log2FoldChange',
+  y = 'pvalue',
+  title = "GSE173160")
+```
+
+# Конвертация имен генов и сохранение
+
+```{r}
+res_tbl <- as.data.frame(res@listData)
+rownames(res_tbl) <- rownames(res)
+res_tbl <- arrange(res_tbl, pvalue, desc(log2FoldChange))
+res_tbl <- rownames_to_column(res_tbl, var="rowname")
+colnames(res_tbl)[1] <- "gene"
+#write_delim(res_tbl, "DGE_result_GSE173160.tsv", delim = '\t')
+```
+
+#Разделение генов и конвертация имен траскриптов в имена генов
+```{r}
+#separate for two tables (over and under exp genes)
+underexp_genes <- subset(res_tbl, pvalue < 0.05 & log2FoldChange < -1)
+overexp_genes <- subset(res_tbl, pvalue < 0.05 & log2FoldChange > 1)
+diffExprGenes <- subset(res_tbl, pvalue < 0.05 & abs(log2FoldChange) > 1)
+
+# Load required packages
+library(biomaRt)
+# Connect to the Ensembl database through the BioMart interface
+ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+
+####convert UNDEREXPRESSED ensembl transcript names to gene symbols####
+## 1 step: from ENST to GENE symbols (better!)
+UnderEnsTtoNames <- getBM(
+  attributes = c("ensembl_transcript_id", "external_gene_name"),
+  filters = "ensembl_transcript_id",
+  values = underexp_genes$gene,
+  mart = ensembl
+)
+
+#fill the empty underexpr gene_name cells by ENSGENES
+UnderEnsTtoNames$external_gene_name <- ifelse(
+  UnderEnsTtoNames$external_gene_name == "",
+  UnderEnsTtoNames$ensembl_transcript_id,
+  UnderEnsTtoNames$external_gene_name
+  )
+
+#take every name except beginning with ENST...
+underNONCODE_list <- str_subset(underexp_genes$gene, "^(?!ENST).*")
+
+#concatenate underexpressed gene symbols and nondcode names
+underListGenes <- c(UnderEnsTtoNames$external_gene_name2,
+                    underNONCODE_list)
+
+#check if there are differencies between the result and the initial lists
+
+#надо подтянуть статистику к именам
+
+#merge names to res table
+underexpGenesMerged <- merge(UnderEnsTtoNames, underexp_genes,
+                             by.x = "ensembl_transcript_id",
+                             by.y = "gene", all = TRUE)
+
+underexpGenesMerged$external_gene_name <- ifelse(
+  is.na(underexpGenesMerged$external_gene_name),
+  underexpGenesMerged$ensembl_transcript_id,
+  underexpGenesMerged$external_gene_name
+  )
+
+underexpGenesMerged <- arrange(underexpGenesMerged,
+                               log2FoldChange)
+
+underexpGenesOut <- underexpGenesMerged[,c(2,4,7)]
+
+#save
+write_delim(underexpGenesOut, "GSE137160_UnderExpressedGenes.tsv", delim = '\t')
+
+####convert OVEREXPRESSED ensembl transcript names to gene symbols####
+
+## 1 step: from ENST to GENE symbols (better!)
+OverEnsTtoNames <- getBM(
+  attributes = c("ensembl_transcript_id", "external_gene_name"),
+  filters = "ensembl_transcript_id",
+  values = overexp_genes$gene,
+  mart = ensembl
+)
+
+#fill the empty underexpr gene_name cells by ENSGENES
+OverEnsTtoNames$external_gene_name <- ifelse(
+  OverEnsTtoNames$external_gene_name == "",
+  OverEnsTtoNames$ensembl_transcript_id,
+  OverEnsTtoNames$external_gene_name
+  )
+
+#take every name except beginning with ENST...
+overNONCODE_list <- str_subset(overexp_genes$gene, "^(?!ENST).*")
+
+#concatenate underexpressed gene symbols and nondcode names
+overListGenes <- c(OverEnsTtoNames$external_gene_name,
+                    overNONCODE_list)
+
+#check if there are differencies between the result and the initial lists
+
+#надо подтянуть статистику к именам
+
+#merge names to res table
+overExprGenesMerged <- merge(OverEnsTtoNames, overexp_genes,
+                             by.x = "ensembl_transcript_id",
+                             by.y = "gene", all = TRUE)
+
+#convert NAs to initial names
+overExprGenesMerged$external_gene_name <- ifelse(
+  is.na(overExprGenesMerged$external_gene_name),
+  overExprGenesMerged$ensembl_transcript_id,
+  overExprGenesMerged$external_gene_name
+  )
+
+#sort by FoldChange
+overExprGenesMerged <- arrange(overExprGenesMerged,
+                               desc(log2FoldChange))
+#take 3 main columns
+overExprGenesOut <- overExprGenesMerged[,c(2,4,7)]
+
+#save
+write_delim(overExprGenesOut, "GSE137160_OverExpressedGenes.tsv", delim = '\t')
+
+```
+

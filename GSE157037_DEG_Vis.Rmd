@@ -1,110 +1,49 @@
 ---
-title: "Анализ данных ген.экспрессии гранулезных клеток при СПКЯ"
+title: "GSE157037_DGE_Vis"
 author: "Игорь Буланов"
 date: "`r Sys.Date()`"
 output: html_document
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = FALSE)
+knitr::opts_chunk$set(echo = TRUE)
 ```
 
-## Анализ ген.экспресии
-
-```{r, message=FALSE, warning=FALSE}
-library(tidyverse)
-library(DESeq2)
-```
-
-# Предобработка данных исследования GSE173160
+# Предобработка данных исследования GSE157037
 
 ```{r, echo = FALSE}
-cts <- read_delim("/home/ibulanov/data/PCOS/GEO/GSE173160_gene_count_matrix.txt.gz")
-cts <- cts[,-c(2:13)]
-cts <- column_to_rownames(cts, var = "lncRNA_id")
-colnames(cts) <- gsub("^1_", "", colnames(cts))
+cts <- read_delim("/home/ibulanov/data/PCOS/GEO/GSE157037_miRNA_raw_counts.txt.gz")
+colnames(cts)
+cts <- cts[,-c(2:31)]
+cts <- column_to_rownames(cts, var = "miRNA")
 
 #first 6 are PCOS, the last 6 are CONTROLS
-samples <- c("95784_count", 
-             "95841_count", 
-             "96846_count",
-             "97194_count",
-             "97477_count",
-             "97550_count",
-             "92393_count",
-             "96349_count",
-             "96412_count",
-             "96725_count",
-             "97232_count",
-             "97371_count"
+condition <- c("donor", 
+             "donor", 
+             "donor",
+             "donor",
+             "PCOS",
+             "PCOS",
+             "PCOS",
+             "PCOS",
+             "PCOS",
+             "PCOS",
+             "PCOS",
+             "donor",
+             "donor",
+             "donor",
+             "donor"
              )
 
-#reoder columns
-cts <- cts[,samples]
+coldata <- data.frame(batch = colnames(cts), condition = condition)
 
-coldata <- data.frame(batch = samples, condition = 
-                        c(rep("PCOS", 6),
-                          rep("CONTROL", 6)
-                          ))
-
-#replace NAs (133) in 97371 sample to 0s
-cts[is.na(cts)] = 0
+#check and replace NAs to 0s
+any(is.na(cts))
 
 dds <- DESeqDataSetFromMatrix(countData = cts,
                               colData = coldata,
                               design= ~condition)
 
-```
-
-# Предобработка данных исследования GSE168404 - mRNA
-
-```{r, echo = FALSE}
-cts <- read_delim("/home/ibulanov/data/PCOS/GEO/GSE173160_gene_count_matrix.txt.gz")
-cts <- cts[,-c(2:13)]
-cts <- column_to_rownames(cts, var = "lncRNA_id")
-colnames(cts) <- gsub("^1_", "", colnames(cts))
-
-#first 6 are PCOS, the last 6 are CONTROLS
-samples <- c("95784_count", 
-             "95841_count", 
-             "96846_count",
-             "97194_count",
-             "97477_count",
-             "97550_count",
-             "92393_count",
-             "96349_count",
-             "96412_count",
-             "96725_count",
-             "97232_count",
-             "97371_count"
-             )
-
-#reoder columns
-cts <- cts[,samples]
-
-coldata <- data.frame(batch = samples, condition = 
-                        c(rep("PCOS", 6),
-                          rep("CONTROL", 6)
-                          ))
-
-#replace NAs (133) in 97371 sample to 0s
-cts[is.na(cts)] = 0
-
-dds <- DESeqDataSetFromMatrix(countData = cts,
-                              colData = coldata,
-                              design= ~condition)
-
-```
-
-# Exploratory analysis and visualization
-
-## Pre-filtering the dataset
-
-```{r}
-nrow(dds)
-keep <- rowSums(counts(dds)) > 1
-dds <- dds[keep,]
-nrow(dds)
 ```
 
 ##The variance stabilizing transformation and the rlog
@@ -141,7 +80,7 @@ ggplot(df, aes(x = x, y = y)) + geom_hex(bins = 80) +
 ## Sample distances
 
 ```{r, echo=FALSE}
-sampleDists <- dist(t(assay(vsd)))
+sampleDists <- dist(t(assay(rld)))
 sampleDists
 
 library("pheatmap")
@@ -168,13 +107,14 @@ pheatmap(samplePoisDistMatrix,
          col = colors)
 ```
 
-#PCA plot
+#PCA plots
 
 ```{r}
-plotPCA(vsd, intgroup = "condition")
+plotPCA(rld, intgroup = "condition")+
+  ggtitle("PCA of GSE157037")
 
-#PCA with VST data
-pcaData <- plotPCA(vsd, intgroup = c( "batch", "condition"), returnData = TRUE)
+#PCA with RLD data
+pcaData <- plotPCA(rld, intgroup = c( "batch", "condition"), returnData = TRUE)
 percentVar <- round(100 * attr(pcaData, "percentVar"))
 
 ggplot(pcaData, aes(x = PC1, y = PC2, color = batch, shape = condition)) +
@@ -182,7 +122,7 @@ ggplot(pcaData, aes(x = PC1, y = PC2, color = batch, shape = condition)) +
   xlab(paste0("PC1: ", percentVar[1], "% variance")) +
   ylab(paste0("PC2: ", percentVar[2], "% variance")) +
   coord_fixed() +
-  ggtitle("PCA with VST data")
+  ggtitle("PCA with RLD of GSE157037")
 
 #GLM-PCA
 library("glmpca")
@@ -191,20 +131,20 @@ gpca.dat <- gpca$factors
 gpca.dat$dim1 <- dds$batch
 gpca.dat$dim2 <- dds$condition
 ggplot(gpca.dat, aes(x = dim1, y = dim2, color = coldata$batch, shape = coldata$condition)) +
-  geom_point(size =3) + coord_fixed() + ggtitle("glmpca - Generalized PCA")
+  geom_point(size =3) + coord_fixed() + ggtitle("glmpca - Generalized PCA of GSE157037")
 
 
 #MDS Plot
-mds <- as.data.frame(colData(vsd))  %>%
+mds <- as.data.frame(colData(rld))  %>%
          cbind(cmdscale(sampleDistMatrix))
 ggplot(mds, aes(x = `1`, y = `2`, color = batch, shape = condition)) +
-  geom_point(size = 3) + coord_fixed() + ggtitle("MDS with VST data")
+  geom_point(size = 3) + coord_fixed() + ggtitle("MDS with RLD data of GSE157037")
 
 #MDS with PoissonDistance
 mdsPois <- as.data.frame(colData(dds)) %>%
    cbind(cmdscale(samplePoisDistMatrix))
 ggplot(mdsPois, aes(x = `1`, y = `2`, color = batch, shape = condition)) +
-  geom_point(size = 3) + coord_fixed() + ggtitle("MDS with PoissonDistances")
+  geom_point(size = 3) + coord_fixed() + ggtitle("MDS with PoissonDistances of GSE157037")
 ```
 
 #Анализ диф.экспрессии
@@ -219,17 +159,17 @@ summary(res)
 res_tbl <- as.data.frame(res@listData)
 rownames(res_tbl) <- rownames(res)
 res_tbl <- arrange(res_tbl, pvalue, desc(log2FoldChange))
-write_delim(res_tbl, "DGE_result_GSE173160.tsv", delim = '\t')
+write_delim(res_tbl, "DGE_result_GSE157037.tsv", delim = '\t')
 
+#show interested genes - 75
+int_genes <- subset(res_tbl, pvalue < 0.05 | log2FoldChange > 1)
+write_delim(res_tbl, "DGE_result_GSE157037_filtered.tsv", delim = '\t')
 
 ```
 
 #Визуализация (Вулканический плот)
 
 ```{r}
-#filtered genes
-table(res_tbl$pvalue < 0.05 & abs(res_tbl$log2FoldChange) > 1)
-
 #show number of genes with p-adj value below 0.05 and logFC <>1
 res.05 <- results(dds, alpha = 0.05)
 table(res.05$padj < 0.05)
@@ -252,9 +192,9 @@ keep <- !is.na(rownames(airway))
 airway <- airway[keep,]
 
 #Plot
-GSE173160_EV <- EnhancedVolcano(res,
+Volcano <- EnhancedVolcano(res,
   lab = rownames(res),
   x = 'log2FoldChange',
   y = 'pvalue',
-  title = "GSE173160")
+  title = "GSE157037")
 ```

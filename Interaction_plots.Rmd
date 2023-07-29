@@ -1,0 +1,63 @@
+---
+title: "Interaction plots"
+author: "Игорь Буланов"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+## Чтение недо- и оверэкспрессированных генов
+```{r}
+library(tidyverse)
+library(ggvenn)
+
+#underexpressed
+GSE193123_under <- read_delim("GSE193123_UnderExpressedGenes.tsv")
+GSE193123_over <- read_delim("GSE193123_OverExpressedGenes.tsv")
+
+GSE137160_under <- read_delim("GSE137160_UnderExpressedGenes.tsv")
+GSE137160_over <- read_delim("GSE137160_OverExpressedGenes.tsv")
+```
+
+# Поиск одиноковых недо- и гиперэкспрессированных генов из разных исследований
+```{r}
+under137160_193123 <- intersect(GSE137160_under$external_gene_name,
+          GSE193123_under$external_gene_name)
+over137160_193123 <- intersect(GSE137160_over$external_gene_name,
+          GSE193123_over$external_gene_name)
+under137160_over193123 <- intersect(GSE137160_under$external_gene_name,
+          GSE193123_over$external_gene_name)
+over137160_under193123 <- intersect(GSE137160_over$external_gene_name,
+          GSE193123_under$external_gene_name)
+
+intersect_table <- list(under137160_193123 = under137160_193123,
+                             over137160_193123 = over137160_193123,
+                              under137160_over193123 = under137160_over193123,
+                            over137160_under193123 = over137160_under193123)
+
+intersect_table <- plyr::ldply(intersect_table, rbind) |> t()
+intersect_table <- as_data_frame(intersect_table)
+write_delim(intersect_table, "intersectDiffGenes137160_193123.tsv", delim = "\t")
+
+```
+
+# Построение диаграммы Венна (пока не работает)
+
+```{r}
+underExprList <- list(GSE193123_under$external_gene_name,
+                      GSE137160_under$external_gene_name)
+
+library(VennDiagram)
+venn.diagram(
+  x = underExprList,
+  category.names = c("Set 1" , "Set 2 "),
+  filename = '14_venn_diagramm.png',
+  #output=TRUE
+)
+
+```
+
+

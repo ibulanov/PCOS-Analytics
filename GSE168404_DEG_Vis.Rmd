@@ -1,0 +1,229 @@
+---
+title: "Анализ данных ген.экспрессии гранулезных клеток при СПКЯ"
+author: "Игорь Буланов"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+## Анализ ген.экспресии
+
+```{r, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(DESeq2)
+```
+
+# Предобработка данных исследования GSE193123
+
+```{r, echo = FALSE}
+library(data.table)
+cts <- read.csv("/home/ibulanov/data/PCOS/GEO/GSE168404_mRNA_C-vs-P.all.txt")
+cts <- cts[,c(1:7)]
+cts <- column_to_rownames(cts, var = "gene_id")
+#colnames(cts) <- gsub("^1_", "", colnames(cts))
+
+coldata <- data.frame(batch = colnames(cts), condition = 
+                        c(rep("CONTROL", 3),
+                          rep("PCOS", 3)
+                          ))
+
+dds <- DESeqDataSetFromMatrix(countData = cts,
+                              colData = coldata,
+                              design= ~condition)
+
+```
+
+# Exploratory analysis and visualization
+
+## Pre-filtering the dataset
+
+```{r}
+nrow(dds)
+keep <- rowSums(counts(dds)) > 1
+dds <- dds[keep,]
+nrow(dds)
+```
+
+##The variance stabilizing transformation and the rlog
+
+```{r, echo=FALSE}
+vsd <- vst(dds, blind = FALSE)
+head(assay(vsd), 3)
+
+rld <- rlog(dds, blind = FALSE)
+head(assay(rld), 3)
+
+colData(vsd)
+
+library("dplyr")
+library("ggplot2")
+
+dds <- estimateSizeFactors(dds)
+
+df <- bind_rows(
+  as_tibble(log2(counts(dds, normalized=TRUE)[, 1:2]+1)) %>%
+         mutate(transformation = "log2(x + 1)"),
+  as_tibble(assay(vsd)[, 1:2]) %>% mutate(transformation = "vst"),
+  as_tibble(assay(rld)[, 1:2]) %>% mutate(transformation = "rlog"))
+  
+colnames(df)[1:2] <- c("x", "y")  
+
+lvls <- c("log2(x + 1)", "vst", "rlog")
+df$transformation <- factor(df$transformation, levels=lvls)
+
+ggplot(df, aes(x = x, y = y)) + geom_hex(bins = 80) +
+  coord_fixed() + facet_grid( . ~ transformation)  
+```
+
+## Sample distances
+
+```{r, echo=FALSE}
+sampleDists <- dist(t(assay(vsd)))
+sampleDists
+
+library("pheatmap")
+library("RColorBrewer")
+
+sampleDistMatrix <- as.matrix( sampleDists )
+rownames(sampleDistMatrix) <- paste( vsd$dex, vsd$cell, sep = " - " )
+colnames(sampleDistMatrix) <- NULL
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+pheatmap(sampleDistMatrix,
+         clustering_distance_rows = sampleDists,
+         clustering_distance_cols = sampleDists,
+         col = colors)
+
+library("PoiClaClu")
+poisd <- PoissonDistance(t(counts(dds)))
+
+samplePoisDistMatrix <- as.matrix( poisd$dd )
+rownames(samplePoisDistMatrix) <- paste( dds$dex, dds$cell, sep=" - " )
+colnames(samplePoisDistMatrix) <- NULL
+pheatmap(samplePoisDistMatrix,
+         clustering_distance_rows = poisd$dd,
+         clustering_distance_cols = poisd$dd,
+         col = colors)
+```
+
+#PCA plot
+
+```{r}
+plotPCA(vsd, intgroup = "condition") +
+  ggtitle("PCA of GSE193123")
+
+#PCA with VST data
+pcaData <- plotPCA(vsd, intgroup = c( "batch", "condition"), returnData = TRUE)
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+
+ggplot(pcaData, aes(x = PC1, y = PC2, color = batch, shape = condition)) +
+  geom_point(size =3) +
+  xlab(paste0("PC1: ", percentVar[1], "% variance")) +
+  ylab(paste0("PC2: ", percentVar[2], "% variance")) +
+  coord_fixed() +
+  ggtitle("PCA with VST data")
+
+#GLM-PCA
+library("glmpca")
+gpca <- glmpca(counts(dds), L=2)
+gpca.dat <- gpca$factors
+gpca.dat$dim1 <- dds$batch
+gpca.dat$dim2 <- dds$condition
+ggplot(gpca.dat, aes(x = dim1, y = dim2, color = coldata$batch, shape = coldata$condition)) +
+  geom_point(size =3) + coord_fixed() + ggtitle("glmpca - Generalized PCA")
+
+
+#MDS Plot
+mds <- as.data.frame(colData(vsd))  %>%
+         cbind(cmdscale(sampleDistMatrix))
+ggplot(mds, aes(x = `1`, y = `2`, color = batch, shape = condition)) +
+  geom_point(size = 3) + coord_fixed() + ggtitle("MDS with VST data")
+
+#MDS with PoissonDistance
+mdsPois <- as.data.frame(colData(dds)) %>%
+   cbind(cmdscale(samplePoisDistMatrix))
+ggplot(mdsPois, aes(x = `1`, y = `2`, color = batch, shape = condition)) +
+  geom_point(size = 3) + coord_fixed() + ggtitle("MDS with PoissonDistances")
+```
+
+#Анализ диф.экспрессии
+
+```{r, eval=FALSE}
+dds <- DESeq(dds)
+res <- results(dds)
+#res <- results(dds, contrast=c("dex","trt","untrt"))
+mcols(res, use.names = TRUE)
+summary(res)
+```
+
+# Конвертация имен генов и сохранение
+
+```{r}
+res_tbl <- as.data.frame(res@listData)
+rownames(res_tbl) <- rownames(res)
+res_tbl <- rownames_to_column(res_tbl, var = "gene")
+
+library(biomaRt)
+ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+
+#convert to external gene name
+gene_names <- getBM(
+  attributes = c("ensembl_gene_id", "external_gene_name"),
+  filters = "ensembl_gene_id",
+  values = res_tbl$gene,
+  mart = ensembl
+)
+
+#connect new names to old ones
+resTblMerged <- merge(gene_names, res_tbl,
+                        by.x = "ensembl_gene_id",
+                        by.y = "gene", all=TRUE)
+#if there is NA gene symbol, leave ensembl gene ids
+resTblMerged$external_gene_name <-
+  ifelse(is.na(resTblMerged$external_gene_name),
+             resTblMerged$ensembl_gene_id,
+       resTblMerged$external_gene_name
+       )
+#if there is empty space isntead of gene symbol, leave ensembl gene ids
+resTblMerged$external_gene_name <-
+  ifelse(resTblMerged$external_gene_name== "",
+             resTblMerged$ensembl_gene_id,
+       resTblMerged$external_gene_name
+       )
+#remove first column (ensembl gene ids)
+resTblMerged <- resTblMerged[,-1]
+
+
+#write_delim(res_tbl, "DGE_result_GSE193123.tsv", delim = '\t')
+
+```
+
+#Визуализация (Вулканический плот)
+
+```{r}
+library(EnhancedVolcano)
+#Plot
+GSE193123_EV <- EnhancedVolcano(resTblMerged[,-1],
+  lab = resTblMerged$external_gene_name,
+  x = 'log2FoldChange',
+  y = 'pvalue',
+  title = "GSE193123")
+```
+
+#Разделение списка генов на overexpressed и underexpressed
+```{r}
+#separate for two tables (over and under exp genes)
+diffExprGenes <- subset(resTblMerged, pvalue < 0.05 & abs(log2FoldChange) > 1)
+
+#filter under- and overexpressed genes separately
+underExprGenes <- subset(resTblMerged, pvalue < 0.05 & log2FoldChange < -1) |> arrange(log2FoldChange) |> dplyr::select(external_gene_name, log2FoldChange, pvalue)
+  
+overExprGenes <- subset(resTblMerged, pvalue < 0.05 & log2FoldChange > 1) |> arrange(desc(log2FoldChange)) |> dplyr::select(external_gene_name, log2FoldChange, pvalue)
+
+#save
+write_delim(underexpGenesOut, "GSE193123_UnderExpressedGenes.tsv", delim = '\t')
+write_delim(overExprGenes, "GSE193123_OverExpressedGenes.tsv", delim = '\t')
+```
+
