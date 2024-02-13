@@ -1,0 +1,30 @@
+target: ENSG00000281383||lncRNA
+length: 923
+miRNA : hsa-miR-652-3p
+length: 21
+
+mfe: -31.3 kcal/mol
+p-value: 0.034471
+
+position  441
+target 5' C     GCUCCAC             C   3'
+           CGCAG       UCCUGGUGGUGCC      
+           GUGUU       GGGAUCACCGCGG      
+miRNA  3'                           UAA 5'
+
+
+target: ENSG00000261141||lncRNA
+length: 1126
+miRNA : hsa-miR-652-3p
+length: 21
+
+mfe: -33.6 kcal/mol
+p-value: 0.015952
+
+position  27
+target 5' U          U        G   3'
+           CAUAACCCUG GUGGUGCU      
+           GUGUUGGGAU CACCGCGG      
+miRNA  3'                     UAA 5'
+
+
